@@ -17,34 +17,52 @@ export const setupEnrichmentWorker = () => {
 
             try {
                 // 1. Update status
-                await prisma.place.update({
+                const existingPlace = await prisma.place.update({
                     where: { id: placeId },
-                    data: { scrapeStatus: 'PROCESSING' }
+                    data: { scrapeStatus: 'PROCESSING' },
+                    select: {
+                        googleId: true,
+                        name: true,
+                        address: true,
+                        website: true,
+                        emails: true,
+                        emailScores: true,
+                        phones: true,
+                        socials: true
+                    }
                 });
 
                 // 2. Perform Scraping
                 // 2. Perform Scraping
 
-                let targetWebsite = website;
+                let targetWebsite = website || existingPlace.website || "";
                 let usedFallback = false;
+                let foundSocials: any = {};
 
-                // Fallback: If no website provided, search Google
-                if (!targetWebsite) {
+                // Fallback: If no website provided OR socials missing, search DuckDuckGo
+                const existingSocials = (existingPlace.socials as any) || {};
+                const socialsMissing = !existingSocials || Object.keys(existingSocials).length === 0;
+
+                if (!targetWebsite || socialsMissing) {
                     const { name, address } = job.data;
-                    console.log(`[Enrichment ${job.id}] Website missing. Searching Google for "${name} ${address}"...`);
+                    console.log(`[Enrichment ${job.id}] Looking up website/socials on DuckDuckGo for "${name} ${address}"...`);
 
                     // Import dynamically to avoid circular deps if any (though here it's fine)
-                    const { searchGoogle } = await import('@/lib/scraper');
-                    const foundUrl = await searchGoogle(`${name} ${address}`);
+                    const { searchDuckDuckGoTargets } = await import('@/lib/scraper');
+                    const ddgResult = await searchDuckDuckGoTargets(`${name} ${address}`);
+                    const foundUrl = ddgResult.website;
+                    foundSocials = ddgResult.socials || {};
 
                     if (foundUrl) {
-                        targetWebsite = foundUrl;
-                        usedFallback = true;
+                        if (!targetWebsite) {
+                            targetWebsite = foundUrl;
+                            usedFallback = true;
+                        }
                         // Determine if we should save this URL to DB immediately?
                         // We will save it at the end ensuring we don't overwrite if it's bad?
                         // Actually, if we scraped it successfully, it's likely good.
                     } else {
-                        console.log(`[Enrichment ${job.id}] No website found on Google.`);
+                        console.log(`[Enrichment ${job.id}] No website found on DuckDuckGo.`);
                     }
                 }
 
@@ -59,6 +77,17 @@ export const setupEnrichmentWorker = () => {
                 }
 
                 const data = await scrapeWebsite(targetWebsite);
+                const mergedSocials = {
+                    ...(existingSocials || {}),
+                    ...(foundSocials || {}),
+                    ...(data.socials || {})
+                };
+                const mergedEmails = (data.emails && data.emails.length > 0) ? data.emails : (existingPlace.emails || []);
+                const mergedPhones = (data.phones && data.phones.length > 0) ? data.phones : (existingPlace.phones || []);
+                const mergedEmailScores = (data.emailScores && Object.keys(data.emailScores).length > 0)
+                    ? data.emailScores
+                    : (existingPlace.emailScores as any) || {};
+                const finalWebsite = (existingPlace.website || "").trim() || targetWebsite || "";
 
                 if (data.meta) {
                     console.log(`[Enrichment ${job.id}] Scraper Meta: Status=${data.meta.status}, Len=${data.meta.contentLength}, PreFilter=${data.meta.foundEmailsBeforeFilter}`);
@@ -68,19 +97,19 @@ export const setupEnrichmentWorker = () => {
                     console.warn(`[Enrichment ${job.id}] ⚠️ No emails found for ${targetWebsite}`);
                 }
 
-                console.log(`[Enrichment ${job.id}] Final: ${data.emails.length} emails, ${Object.keys(data.socials).length} socials`);
+                console.log(`[Enrichment ${job.id}] Final: ${mergedEmails.length} emails, ${Object.keys(mergedSocials).length} socials`);
 
                 // 3. Save Data
                 const updatedPlace = await prisma.place.update({
                     where: { id: placeId },
                     data: {
-                        emails: data.emails,
-                        emailScores: data.emailScores || {},
-                        phones: data.phones,
-                        socials: data.socials as any,
+                        emails: mergedEmails,
+                        emailScores: mergedEmailScores,
+                        phones: mergedPhones,
+                        socials: mergedSocials as any,
                         scrapeStatus: 'COMPLETED',
                         // If we found a website via fallback, save it!
-                        ...(usedFallback && targetWebsite ? { website: targetWebsite } : {})
+                        ...(usedFallback && targetWebsite ? { website: targetWebsite } : (finalWebsite ? { website: finalWebsite } : {}))
                     }
                 });
 
@@ -92,7 +121,10 @@ export const setupEnrichmentWorker = () => {
                         name: updatedPlace.name,
                         // We must send ALL fields needed by frontend to merging logic
                         emails: updatedPlace.emails,
+                        emailScores: updatedPlace.emailScores,
+                        phones: updatedPlace.phones,
                         socials: updatedPlace.socials,
+                        website: updatedPlace.website,
                         formatted_address: updatedPlace.address, // Maintain context
                         // Add marker to tell frontend this is an UPDATE not a new row?
                         // The frontend helper: "const uniqueNew = newPlaces.filter(...)".
@@ -129,7 +161,7 @@ export const setupEnrichmentWorker = () => {
         },
         {
             connection: redisConnection,
-            concurrency: parseInt(process.env.ENRICHMENT_CONCURRENCY || '5') // Increased for speed
+            concurrency: parseInt(process.env.ENRICHMENT_CONCURRENCY || '10') // Increased for speed
         }
     );
 

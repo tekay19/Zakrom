@@ -12,6 +12,7 @@ const worker = new Worker(EXPORT_QUEUE_NAME, async (job: Job) => {
     console.log(`Processing export for user ${userId}, job ${job.id}`);
 
     await redis.set(`export:${jobId}:status`, "processing", "EX", 3600);
+    await redis.set(`export:${jobId}:format`, format, "EX", 3600);
 
     try {
         // Fetch Fresh Data from DB to ensure Emails/Phones are up to date

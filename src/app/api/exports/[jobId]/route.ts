@@ -13,10 +13,11 @@ export async function GET(
     const isDownload = searchParams.get('download') === 'true';
 
     try {
-        const [status, result, error] = await Promise.all([
+        const [status, result, error, format] = await Promise.all([
             redis.get(`export:${jobId}:status`),
             redis.get(`export:${jobId}:result`),
             redis.get(`export:${jobId}:error`),
+            redis.get(`export:${jobId}:format`),
         ]);
 
         if (!status) {
@@ -24,9 +25,11 @@ export async function GET(
         }
 
         if (isDownload && status === 'completed' && result) {
-            const format = jobId.includes('xlsx') ? 'xlsx' : 'csv';
+            const resolvedFormat = (format === "xlsx" || format === "csv")
+                ? format
+                : (jobId.includes('xlsx') ? 'xlsx' : 'csv');
 
-            if (format === 'xlsx') {
+            if (resolvedFormat === 'xlsx') {
                 const buffer = Buffer.from(result, 'base64');
                 return new NextResponse(buffer, {
                     headers: {

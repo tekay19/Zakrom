@@ -1,6 +1,6 @@
 
-import puppeteer, { Browser } from 'puppeteer';
-import { validateEmails, EmailValidationResult } from './email-validator';
+import puppeteer, { Browser, Page } from 'puppeteer';
+import { validateEmails } from './email-validator';
 
 export interface ScrapedData {
     emails: string[];
@@ -25,7 +25,7 @@ export interface ScrapedData {
 const SOCIAL_PATTERNS = {
     facebook: /facebook\.com\/[a-zA-Z0-9\.]+/i,
     instagram: /instagram\.com\/[a-zA-Z0-9\._]+/i,
-    twitter: /twitter\.com\/[a-zA-Z0-9_]+/i,
+    twitter: /(twitter|x)\.com\/[a-zA-Z0-9_]+/i,
     linkedin: /linkedin\.com\/(in|company)\/[a-zA-Z0-9\-_%]+/i,
     youtube: /youtube\.com\/(channel|user|c)\/[a-zA-Z0-9\-_]+/i,
 };
@@ -33,6 +33,93 @@ const SOCIAL_PATTERNS = {
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 // Basic international phone regex (very permissive)
 const PHONE_REGEX = /(\+?[0-9]{1,4}[\s-]?)?\(?[0-9]{3}\)?[\s-]?[0-9]{3}[\s-]?[0-9]{2,4}/g;
+const HEADER_FOOTER_SELECTOR = 'header, footer, #header, #footer, .header, .footer';
+const HEADER_FOOTER_LINK_SELECTOR = 'header a, footer a, #header a, #footer a, .header a, .footer a';
+
+const HUMAN_USER_AGENTS = [
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+];
+
+const VIEWPORTS = [
+    { width: 1366, height: 768 },
+    { width: 1440, height: 900 },
+    { width: 1536, height: 864 },
+    { width: 1280, height: 720 }
+];
+
+const JUNK_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.tiff', '.ico', '.css', '.js', '.woff', '.woff2', '.mp4', '.mp3', '.wav', '.json', '.xml'];
+const JUNK_DOMAINS = ['sentry.io', 'sentry.wixpress.com', 'sentry-next.wixpress.com', 'example.com', 'domain.com', 'email.com', 'yoursite.com'];
+const JUNK_PREFIXES = ['u002f', 'u003e', 'ue00', 'name@'];
+
+const pickRandom = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+
+const sleepRandom = async (minMs: number, maxMs: number) => {
+    const delay = Math.floor(minMs + Math.random() * (maxMs - minMs));
+    return new Promise((resolve) => setTimeout(resolve, delay));
+};
+
+const extractEmailsFromText = (text: string) => {
+    const emailMatches = text.match(EMAIL_REGEX) || [];
+    return [...new Set(emailMatches)]
+        .map(e => e.toLowerCase())
+        .filter(e => {
+            if (JUNK_EXTENSIONS.some(ext => e.endsWith(ext))) return false;
+            const domain = e.split('@')[1];
+            if (!domain || JUNK_DOMAINS.some(d => domain.includes(d))) return false;
+            if (JUNK_PREFIXES.some(p => e.startsWith(p))) return false;
+            if (/^[0-9]+@/.test(e)) return false;
+            return true;
+        });
+};
+
+const extractPhonesFromText = (text: string) => {
+    const phoneMatches = text.match(PHONE_REGEX) || [];
+    return [...new Set(phoneMatches)]
+        .map(p => p.trim())
+        .filter(p => p.length >= 8 && p.length <= 20);
+};
+
+const parseMailto = (href: string) => {
+    const raw = href.replace(/^mailto:/i, '').split('?')[0];
+    try {
+        return decodeURIComponent(raw).trim();
+    } catch {
+        return raw.trim();
+    }
+};
+
+const parseTel = (href: string) => {
+    const raw = href.replace(/^tel:/i, '').split('?')[0];
+    try {
+        return decodeURIComponent(raw).trim();
+    } catch {
+        return raw.trim();
+    }
+};
+
+const applyHumanSignals = async (page: Page) => {
+    await page.setUserAgent(pickRandom(HUMAN_USER_AGENTS));
+    await page.setViewport(pickRandom(VIEWPORTS));
+    await page.setExtraHTTPHeaders({
+        'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7'
+    });
+};
+
+const performHumanInteraction = async (page: Page) => {
+    await sleepRandom(150, 450);
+    const { width, height } = page.viewport() || { width: 1366, height: 768 };
+    try {
+        await page.mouse.move(Math.floor(width * 0.2), Math.floor(height * 0.3), { steps: 8 });
+        await page.mouse.move(Math.floor(width * 0.6), Math.floor(height * 0.4), { steps: 10 });
+        await page.mouse.wheel({ deltaY: Math.floor(200 + Math.random() * 600) });
+        await sleepRandom(200, 600);
+    } catch {
+        // Ignore if mouse/viewport not ready
+    }
+};
 
 export async function scrapeWebsite(url: string): Promise<ScrapedData> {
     let browser: Browser | null = null;
@@ -54,6 +141,7 @@ export async function scrapeWebsite(url: string): Promise<ScrapedData> {
         });
 
         const page = await browser.newPage();
+        await applyHumanSignals(page);
 
         // Block resources to speed up
         await page.setRequestInterception(true);
@@ -68,46 +156,61 @@ export async function scrapeWebsite(url: string): Promise<ScrapedData> {
 
         // Navigate with timeout
         const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await performHumanInteraction(page);
         const httpStatus = response ? response.status() : 0;
 
         // Get full HTML content
         const content = await page.content();
 
-        // 1. Extract Emails
+        // 1. Extract Emails / Phones from full content
         const emailMatches = content.match(EMAIL_REGEX) || [];
         const foundEmailsBeforeFilter = emailMatches.length;
-        const JUNK_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.tiff', '.ico', '.css', '.js', '.woff', '.woff2', '.mp4', '.mp3', '.wav', '.json', '.xml'];
-        const JUNK_DOMAINS = ['sentry.io', 'sentry.wixpress.com', 'sentry-next.wixpress.com', 'example.com', 'domain.com', 'email.com', 'yoursite.com'];
-        const JUNK_PREFIXES = ['u002f', 'u003e', 'ue00', 'name@'];
-
-        data.emails = [...new Set(emailMatches)]
-            .map(e => e.toLowerCase())
-            .filter(e => {
-                // Filter invalid extensions (images/assets mistaken as emails)
-                if (JUNK_EXTENSIONS.some(ext => e.endsWith(ext))) return false;
-
-                // Filter junk domains
-                const domain = e.split('@')[1];
-                if (!domain || JUNK_DOMAINS.some(d => domain.includes(d))) return false;
-
-                // Filter junk prefixes often found in scraped JSON/JS code
-                if (JUNK_PREFIXES.some(p => e.startsWith(p))) return false;
-
-                // Filter numeric-only locals (e.g. 123@gmail) which are often phone number artifacts
-                if (/^[0-9]+@/.test(e)) return false;
-
-                return true;
-            });
-
-        // 2. Extract Phones (Limit to reasonable length matches and uniqueness)
-        const phoneMatches = content.match(PHONE_REGEX) || [];
-        data.phones = [...new Set(phoneMatches)]
-            .map(p => p.trim())
-            .filter(p => p.length >= 8 && p.length <= 20);
+        data.emails = extractEmailsFromText(content);
+        data.phones = extractPhonesFromText(content);
 
         // 3. Extract Social Links
         // Look at all 'a' tags hrefs
         const links = await page.$$eval('a', as => as.map(a => ({ href: a.href, text: a.innerText })));
+        const headerFooterText = await page.$$eval(
+            HEADER_FOOTER_SELECTOR,
+            els => els.map(el => (el as HTMLElement).innerText || '').join('\n')
+        ).catch(() => "");
+        const headerFooterLinks = await page.$$eval(
+            HEADER_FOOTER_LINK_SELECTOR,
+            as => as.map(a => ({ href: (a as HTMLAnchorElement).href, text: (a as HTMLAnchorElement).innerText }))
+        ).catch(() => []);
+
+        if (headerFooterText) {
+            data.emails = [...new Set([...data.emails, ...extractEmailsFromText(headerFooterText)])];
+            data.phones = [...new Set([...data.phones, ...extractPhonesFromText(headerFooterText)])];
+        }
+
+        const mailtoEmails = links
+            .map(l => l.href)
+            .filter(h => h.toLowerCase().startsWith('mailto:'))
+            .map(parseMailto)
+            .filter(Boolean);
+
+        const telPhones = links
+            .map(l => l.href)
+            .filter(h => h.toLowerCase().startsWith('tel:'))
+            .map(parseTel)
+            .filter(Boolean);
+
+        const headerMailtoEmails = (headerFooterLinks as any[])
+            .map(l => l.href)
+            .filter((h: string) => h.toLowerCase().startsWith('mailto:'))
+            .map(parseMailto)
+            .filter(Boolean);
+
+        const headerTelPhones = (headerFooterLinks as any[])
+            .map(l => l.href)
+            .filter((h: string) => h.toLowerCase().startsWith('tel:'))
+            .map(parseTel)
+            .filter(Boolean);
+
+        data.emails = [...new Set([...data.emails, ...mailtoEmails, ...headerMailtoEmails])];
+        data.phones = [...new Set([...data.phones, ...telPhones, ...headerTelPhones])];
 
         links.forEach(link => {
             const href = link.href;
@@ -145,17 +248,7 @@ export async function scrapeWebsite(url: string): Promise<ScrapedData> {
                     await page.goto(contactLink.href, { waitUntil: 'domcontentloaded', timeout: 15000 });
                     const subContent = await page.content();
 
-                    const subEmailMatches = subContent.match(EMAIL_REGEX) || [];
-                    const newEmails = [...new Set(subEmailMatches)]
-                        .map(e => e.toLowerCase())
-                        .filter(e => {
-                            if (JUNK_EXTENSIONS.some(ext => e.endsWith(ext))) return false;
-                            const d = e.split('@')[1];
-                            if (!d || JUNK_DOMAINS.some(jnk => d.includes(jnk))) return false;
-                            if (JUNK_PREFIXES.some(p => e.startsWith(p))) return false;
-                            if (/^[0-9]+@/.test(e)) return false;
-                            return true;
-                        });
+                    const newEmails = extractEmailsFromText(subContent);
 
                     if (newEmails.length > 0) {
                         console.log(`[Smart Scraper] Found ${newEmails.length} emails on sub-page!`);
@@ -211,7 +304,52 @@ export async function scrapeWebsite(url: string): Promise<ScrapedData> {
     }
 }
 
-export async function searchGoogle(query: string): Promise<string | null> {
+const decodeDuckDuckGoUrl = (href: string | null) => {
+    if (!href) return null;
+    try {
+        const url = new URL(href);
+        if (url.hostname.includes('duckduckgo.com')) {
+            const uddg = url.searchParams.get('uddg');
+            if (uddg) return decodeURIComponent(uddg);
+        }
+    } catch {
+        // ignore
+    }
+    return href;
+};
+
+const isLikelyWebsiteUrl = (href: string) => {
+    const lower = href.toLowerCase();
+    const blocked = [
+        'facebook.com',
+        'instagram.com',
+        'twitter.com',
+        'x.com',
+        'linkedin.com',
+        'youtube.com',
+        'tiktok.com',
+        'google.com/maps',
+        'goo.gl/maps',
+        'g.page',
+        'yelp.com',
+        'tripadvisor.',
+        'opentable.com',
+        'foursquare.com',
+        'apple.com/maps'
+    ];
+    if (blocked.some(b => lower.includes(b))) return false;
+    return lower.startsWith('http');
+};
+
+const mergeSocials = (a: ScrapedData["socials"], b: ScrapedData["socials"]) => ({
+    facebook: b.facebook || a.facebook,
+    instagram: b.instagram || a.instagram,
+    twitter: b.twitter || a.twitter,
+    linkedin: b.linkedin || a.linkedin,
+    youtube: b.youtube || a.youtube
+});
+
+export async function searchDuckDuckGoTargets(query: string): Promise<{ website: string | null; socials: ScrapedData["socials"] }> {
     let browser: Browser | null = null;
     try {
         console.log(`[Web Search] Searching for: "${query}" via DuckDuckGo`);
@@ -221,6 +359,7 @@ export async function searchGoogle(query: string): Promise<string | null> {
         });
 
         const page = await browser.newPage();
+        await applyHumanSignals(page);
 
         // Block heavy resources
         await page.setRequestInterception(true);
@@ -233,28 +372,53 @@ export async function searchGoogle(query: string): Promise<string | null> {
         });
 
         // Use HTML version of DDG
-        await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         await page.goto('https://html.duckduckgo.com/html/', { waitUntil: 'domcontentloaded', timeout: 30000 });
 
         // Type into the form
-        await page.type('input[name="q"]', query);
+        await sleepRandom(200, 500);
+        await page.type('input[name="q"]', query, { delay: Math.floor(30 + Math.random() * 60) });
         await page.keyboard.press('Enter');
 
         await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 });
+        await performHumanInteraction(page);
 
-        // Extract first organic result
-        const href = await page.evaluate(() => {
-            const anchor = document.querySelector('.result__a');
-            return anchor ? anchor.getAttribute('href') : null;
+        // Extract organic results
+        const hrefs = await page.evaluate(() => {
+            return Array.from(document.querySelectorAll('.result__a'))
+                .map(a => (a as HTMLAnchorElement).getAttribute('href'))
+                .filter(Boolean);
         });
 
-        console.log(`[Web Search] Found URL: ${href}`);
-        return href;
+        let website: string | null = null;
+        let socials: ScrapedData["socials"] = {};
+
+        for (const rawHref of hrefs) {
+            const decoded = decodeDuckDuckGoUrl(rawHref);
+            if (!decoded) continue;
+
+            if (SOCIAL_PATTERNS.facebook.test(decoded)) socials = mergeSocials(socials, { facebook: decoded });
+            if (SOCIAL_PATTERNS.instagram.test(decoded)) socials = mergeSocials(socials, { instagram: decoded });
+            if (SOCIAL_PATTERNS.twitter.test(decoded)) socials = mergeSocials(socials, { twitter: decoded });
+            if (SOCIAL_PATTERNS.linkedin.test(decoded)) socials = mergeSocials(socials, { linkedin: decoded });
+            if (SOCIAL_PATTERNS.youtube.test(decoded)) socials = mergeSocials(socials, { youtube: decoded });
+
+            if (!website && isLikelyWebsiteUrl(decoded)) {
+                website = decoded;
+            }
+        }
+
+        console.log(`[Web Search] Found Website: ${website}`);
+        return { website, socials };
 
     } catch (error) {
         console.error(`[Web Search] Failed for query "${query}":`, error);
-        return null;
+        return { website: null, socials: {} };
     } finally {
         if (browser) await browser.close();
     }
+}
+
+export async function searchGoogle(query: string): Promise<string | null> {
+    const result = await searchDuckDuckGoTargets(query);
+    return result.website;
 }

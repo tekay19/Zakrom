@@ -3,7 +3,7 @@ import { GridGenerator, Viewport } from "@/lib/grid-generator";
 
 const GOOGLE_API_KEYS = (process.env.GOOGLE_API_KEYS || process.env.GOOGLE_MAPS_API_KEY || "").split(",").filter(Boolean);
 const FETCH_TIMEOUT_MS = Number(process.env.GOOGLE_PLACES_FETCH_TIMEOUT_MS || 10000);
-const MAX_CONCURRENCY = Number(process.env.GOOGLE_PLACES_MAX_CONCURRENCY || 40);
+const MAX_CONCURRENCY = 100; // Increased for deep country-wide scans
 
 export interface GatewayResponse {
     places: any[];
@@ -40,13 +40,18 @@ class GooglePlacesGateway {
         }
     }
 
-    public async scanCity(query: string, viewport: Viewport): Promise<any[]> {
-        const gridPoints = GridGenerator.generate3x3Grid(viewport);
-        const MAX_PAGES_PER_GRID = 3; // Fetch up to 60 results per grid cell
+    public async scanCity(query: string, viewport: Viewport, options: { gridSize?: number; maxPagesPerGrid?: number } = {}): Promise<any[]> {
+        const gridPoints = options.gridSize
+            ? GridGenerator.generateGrid(viewport, options.gridSize)
+            : GridGenerator.generate3x3Grid(viewport);
+        const MAX_PAGES_PER_GRID = options.maxPagesPerGrid || 3; // Fetch up to 60 results per grid cell
 
         // Execute parallel requests for each grid sector
         // Limit concurrency to avoid unexpected rate limits despite inflight limiter
-        const results = await Promise.all(gridPoints.map(async (point) => {
+        console.log(`[Grid Scan] Starting scan. Grid points: ${gridPoints.length}. Viewport:`, JSON.stringify(viewport));
+
+        const results = await Promise.all(gridPoints.map(async (point, index) => {
+            console.log(`[Grid Scan] Processing point ${index + 1}/${gridPoints.length}: ${point.lat},${point.lng}`);
             // We use locationBias to focus the search on this specific grid cell
             const locationBias = {
                 circle: {
@@ -70,7 +75,10 @@ class GooglePlacesGateway {
                     });
 
                     if (response.places && response.places.length > 0) {
+                        console.log(`[Grid Scan] Found ${response.places.length} places in sector ${point.lat},${point.lng}`);
                         allGridPlaces.push(...response.places);
+                    } else {
+                        console.log(`[Grid Scan] No places in sector ${point.lat},${point.lng}`);
                     }
 
                     nextPageToken = response.nextPageToken;
@@ -80,7 +88,7 @@ class GooglePlacesGateway {
 
                 return allGridPlaces;
             } catch (e) {
-                console.error(`Grid scan failed for point ${point.lat},${point.lng}:`, e);
+                console.error(`[Grid Scan] Failed for sector ${point.lat},${point.lng}:`, e);
                 return [];
             }
         }));
@@ -93,7 +101,7 @@ class GooglePlacesGateway {
         const url = "https://places.googleapis.com/v1/places:searchText";
         const fieldMask = "places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.regularOpeningHours,places.businessStatus,places.location,places.viewport,places.photos,nextPageToken";
 
-        return withCircuitBreaker("google-places", { failureThreshold: 5, resetTimeoutSec: 60 }, async () => {
+        return withCircuitBreaker("google-places", { resetTimeoutSec: 60 }, async () => {
             return withInflightLimiter("google-places:inflight", MAX_CONCURRENCY, 30, async () => {
                 let attempt = 0;
                 const maxAttempts = 3;
@@ -168,6 +176,7 @@ class GooglePlacesGateway {
             website: place.websiteUri,
             business_status: place.businessStatus,
             location: place.location,
+            viewport: place.viewport,
             photos: place.photos || [],
             opening_hours: {
                 open_now: place.regularOpeningHours?.openNow

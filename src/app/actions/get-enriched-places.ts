@@ -18,6 +18,7 @@ export async function getEnrichedPlaces(placeIds: string[]) {
             googleId: true,
             emails: true,
             emailScores: true,
+            phones: true,
             socials: true,
             website: true,
             scrapeStatus: true
@@ -28,6 +29,7 @@ export async function getEnrichedPlaces(placeIds: string[]) {
         place_id: p.googleId,
         emails: p.emails || [],
         emailScores: p.emailScores || {},
+        phones: p.phones || [],
         socials: p.socials || {},
         website: p.website,
         scrapeStatus: p.scrapeStatus

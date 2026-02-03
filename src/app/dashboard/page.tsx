@@ -206,7 +206,10 @@ export default function Home() {
               ...existing,
               ...newPlace,
               emails: newPlace.emails?.length ? newPlace.emails : existing.emails,
-              socials: newPlace.socials ? newPlace.socials : existing.socials
+              emailScores: newPlace.emailScores && Object.keys(newPlace.emailScores).length > 0 ? newPlace.emailScores : existing.emailScores,
+              phones: newPlace.phones?.length ? newPlace.phones : existing.phones,
+              socials: newPlace.socials && Object.keys(newPlace.socials).length > 0 ? newPlace.socials : existing.socials,
+              website: newPlace.website || existing.website
             });
           } else {
             prevMap.set(newPlace.place_id, newPlace);
@@ -254,7 +257,11 @@ export default function Home() {
     if (results.length === 0 || isLoading) return;
 
     // Check if any results have pending scrape status (need enrichment)
-    const needsEnrichment = results.some(r => !r.emails || r.emails.length === 0);
+    const needsEnrichment = results.some(r =>
+      (!r.emails || r.emails.length === 0) ||
+      (!r.phones || r.phones.length === 0) ||
+      (!r.socials || Object.keys(r.socials).length === 0)
+    );
     if (!needsEnrichment) return;
 
     let pollCount = 0;
@@ -274,10 +281,13 @@ export default function Home() {
                 const existing = updatedMap.get(enriched.place_id)!;
                 // Only update if we have new data
                 if ((enriched.emails?.length > 0 && (!existing.emails || existing.emails.length === 0)) ||
+                  (enriched.phones?.length > 0 && (!existing.phones || existing.phones.length === 0)) ||
                   (enriched.socials && Object.keys(enriched.socials).length > 0 && (!existing.socials || Object.keys(existing.socials).length === 0))) {
                   updatedMap.set(enriched.place_id, {
                     ...existing,
                     emails: enriched.emails?.length > 0 ? enriched.emails : existing.emails,
+                    emailScores: enriched.emailScores && Object.keys(enriched.emailScores).length > 0 ? enriched.emailScores : existing.emailScores,
+                    phones: enriched.phones?.length > 0 ? enriched.phones : existing.phones,
                     socials: enriched.socials && Object.keys(enriched.socials).length > 0 ? enriched.socials : existing.socials,
                     website: enriched.website || existing.website
                   });
@@ -586,7 +596,11 @@ export default function Home() {
                 {/* Tier Selector Removed */}
               </div>
 
-              <SearchForm onSearch={handleSearch} isLoading={isLoading && results.length === 0} />
+              <SearchForm
+                onSearch={handleSearch}
+                isLoading={isLoading && results.length === 0}
+                defaultDeepSearch={activeTier === "BUSINESS"}
+              />
 
               {/* Search Progress Overlay */}
               <SearchProgress

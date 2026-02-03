@@ -82,9 +82,17 @@ export function PlaceDetailModal({ isOpen, onClose, place }: PlaceDetailModalPro
                             </div>
 
                             {place.formatted_phone_number ? (
-                                <div className="flex items-center gap-3 text-sm text-white/90">
-                                    <Phone className="w-4 h-4 text-primary shrink-0" />
-                                    <span>{place.formatted_phone_number}</span>
+                                <div className="flex flex-col gap-1">
+                                    <div className="flex items-center gap-3 text-sm text-white/90">
+                                        <Phone className="w-4 h-4 text-primary shrink-0" />
+                                        <span>{place.formatted_phone_number}</span>
+                                    </div>
+                                    {place.phones && place.phones.length > 0 && (
+                                        <div className="text-xs text-muted-foreground">
+                                            Bulunan Telefonlar: {place.phones.slice(0, 3).join(", ")}
+                                            {place.phones.length > 3 ? ` +${place.phones.length - 3}` : ""}
+                                        </div>
+                                    )}
                                 </div>
                             ) : (
                                 <div className="flex items-center gap-3 text-sm text-muted-foreground">

@@ -23,6 +23,7 @@ export interface PlaceResult {
     };
     emails?: string[];
     emailScores?: { [email: string]: number }; // Email reliability scores (0-100)
+    phones?: string[];
     socials?: {
         facebook?: string;
         instagram?: string;
@@ -525,14 +526,22 @@ const ResultRow = React.memo(function ResultRow({ place, formatType, onSelect }:
                 )}
             </td>
             <td className="p-4 text-muted-foreground">
-                {place.formatted_phone_number ? (
-                    <div className="flex items-center gap-2 text-white/80">
-                        <Phone className="w-4 h-4 text-white/40" />
-                        <span className="font-mono text-xs">{place.formatted_phone_number}</span>
-                    </div>
-                ) : (
-                    <span className="opacity-50 text-xs">-</span>
-                )}
+                <div className="flex flex-col gap-1.5">
+                    {place.formatted_phone_number ? (
+                        <div className="flex items-center gap-2 text-white/80">
+                            <Phone className="w-4 h-4 text-white/40" />
+                            <span className="font-mono text-xs">{place.formatted_phone_number}</span>
+                        </div>
+                    ) : (
+                        <span className="opacity-50 text-xs">-</span>
+                    )}
+                    {place.phones && place.phones.length > 0 && (
+                        <div className="text-[10px] text-muted-foreground">
+                            Bulunan: {place.phones.slice(0, 2).join(", ")}
+                            {place.phones.length > 2 ? ` +${place.phones.length - 2}` : ""}
+                        </div>
+                    )}
+                </div>
             </td>
             <td className="p-4 hidden md:table-cell">
                 <div className="flex flex-col gap-1.5">

@@ -42,7 +42,10 @@ export async function waitForValue(key: string, timeoutMs: number, pollMs = 200)
  * Circuit Breaker implementation using Redis.
  * Prevents cascading failures when external services are down or slow.
  */
-export async function withCircuitBreaker<T>(serviceName: string, config: { failureThreshold: number; resetTimeoutSec: number }, work: () => Promise<T>) {
+export async function withCircuitBreaker<T>(serviceName: string, config: { failureThreshold?: number; resetTimeoutSec?: number } = { failureThreshold: 50, resetTimeoutSec: 60 }, work: () => Promise<T>) {
+    const actualFailureThreshold = config.failureThreshold ?? 50;
+    const actualResetTimeoutSec = config.resetTimeoutSec ?? 60;
+
     const stateKey = `cb:${serviceName}:state`; // OPEN or CLOSED
     const failureCountKey = `cb:${serviceName}:failures`;
 
@@ -57,8 +60,8 @@ export async function withCircuitBreaker<T>(serviceName: string, config: { failu
         return result;
     } catch (error) {
         const failures = await redis.incr(failureCountKey);
-        if (failures >= config.failureThreshold) {
-            await redis.set(stateKey, "OPEN", "EX", config.resetTimeoutSec);
+        if (failures >= actualFailureThreshold) {
+            await redis.set(stateKey, "OPEN", "EX", actualResetTimeoutSec);
             await redis.del(failureCountKey);
         }
         throw error;

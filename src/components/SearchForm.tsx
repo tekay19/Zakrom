@@ -9,6 +9,7 @@ import { CONTINENTS, COUNTRY_CONTINENT_MAP } from "@/lib/continents";
 interface SearchFormProps {
     onSearch: (city: string, keyword: string, deepSearch?: boolean) => void;
     isLoading: boolean;
+    defaultDeepSearch?: boolean;
 }
 
 interface SearchHistoryItem {
@@ -22,13 +23,14 @@ interface SearchHistoryItem {
     cityName?: string;
 }
 
-export function SearchForm({ onSearch, isLoading }: SearchFormProps) {
+export function SearchForm({ onSearch, isLoading, defaultDeepSearch }: SearchFormProps) {
     const [selectedContinent, setSelectedContinent] = useState("");
     const [selectedCountryCode, setSelectedCountryCode] = useState("");
     const [selectedStateCode, setSelectedStateCode] = useState("");
     const [selectedCityName, setSelectedCityName] = useState("");
     const [keyword, setKeyword] = useState("");
-    const [isDeepSearch, setIsDeepSearch] = useState(false);
+    const [isDeepSearch, setIsDeepSearch] = useState(defaultDeepSearch ?? false);
+    const [deepSearchManuallySet, setDeepSearchManuallySet] = useState(false);
 
     const [history, setHistory] = useState<SearchHistoryItem[]>([]);
 
@@ -42,6 +44,12 @@ export function SearchForm({ onSearch, isLoading }: SearchFormProps) {
             }
         }
     }, []);
+
+    useEffect(() => {
+        if (!deepSearchManuallySet && typeof defaultDeepSearch === "boolean") {
+            setIsDeepSearch(defaultDeepSearch);
+        }
+    }, [defaultDeepSearch, deepSearchManuallySet]);
 
     const countries = useMemo<ICountry[]>(() => {
         let all = Country.getAllCountries();
@@ -136,7 +144,7 @@ export function SearchForm({ onSearch, isLoading }: SearchFormProps) {
         else if (item.stateCode) location = `${state?.name}, ${country?.name}`;
         else location = `${country?.name}`;
 
-        onSearch(location, item.keyword);
+        onSearch(location, item.keyword, isDeepSearch);
     };
 
     return (
@@ -246,7 +254,10 @@ export function SearchForm({ onSearch, isLoading }: SearchFormProps) {
                     <div className="w-full flex items-center justify-between mt-4 pt-4 border-t border-white/5">
                         <div
                             className="flex items-center gap-3 cursor-pointer select-none group"
-                            onClick={() => setIsDeepSearch(!isDeepSearch)}
+                            onClick={() => {
+                                setIsDeepSearch(!isDeepSearch);
+                                setDeepSearchManuallySet(true);
+                            }}
                         >
                             <div className={cn(
                                 "w-12 h-7 rounded-full transition-all duration-300 relative border",
@@ -259,7 +270,7 @@ export function SearchForm({ onSearch, isLoading }: SearchFormProps) {
                             </div>
                             <div className="flex flex-col">
                                 <span className={cn("text-sm font-bold transition-colors", isDeepSearch ? "text-primary" : "text-white/70 group-hover:text-white")}>Derin Arama</span>
-                                <span className="text-[10px] text-muted-foreground">9 Sektör (10 Kredi) - Daha fazla sonuç</span>
+                                <span className="text-[10px] text-muted-foreground">Standart arama 60 sonuçla sınırlı • Derin Arama 10 kredi</span>
                             </div>
                         </div>
 
